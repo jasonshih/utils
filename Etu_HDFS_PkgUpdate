@@ -29,13 +29,14 @@ warn() {
 
 error() {
     printf  "`date +%c` - ERROR: $*\n" 
-    exit 1
 }
 
 chk_file () {
   if [ ! -f $1 ]; then
      error "Missing file: $1"
-     exit 1
+     return 1
+  else
+     return 0
   fi
 }
 
@@ -43,6 +44,8 @@ chk_dir () {
   if [ ! -d $1 ]; then
      error "Cant find directory: $1"
      return 1
+  else
+     return 0
   fi
 }
 
@@ -62,7 +65,7 @@ chk_file $1
 
 backup_pkg () {
 
-   chk_dir $_bkp_root
+   chk_dir $_bkp_root || mkdir $_bkp_root
    # preserve backup for master only
    info "Backing up current Hadoop settings"
    #cp -r $_hdfs_home/etc/hadoop $_bkp_root
