@@ -1,0 +1,9 @@
+#!/bin/bash
+
+/opt/hadoop/sbin/yarn-daemon.sh stop resourcemanager 
+sleep 2 
+/opt/hadoop/sbin/yarn-daemon.sh start resourcemanager
+
+ssh etu-12 "/opt/hadoop/sbin/yarn-daemon.sh stop nodemanager ; sleep 2 ; /opt/hadoop/sbin/yarn-daemon.sh start nodemanager"
+ssh etu-13 "/opt/hadoop/sbin/yarn-daemon.sh stop nodemanager ; sleep 2 ; /opt/hadoop/sbin/yarn-daemon.sh start nodemanager"
+

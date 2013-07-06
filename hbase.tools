@@ -1,0 +1,132 @@
+hbase(main):009:0> tools
+Command: assign
+Assign a region.Use with caution.If region already assigned,
+this command will just go ahead and reassign
+the region anyways. For experts only.
+
+Command: balance_switch
+Enable/Disable balancer. Returns previous balancer state.
+Examples:
+
+  hbase> balance_switch true
+  hbase> balance_switch false
+
+Command: balancer
+Trigger the cluster balancer. Returns true if balancer ran and was able to
+tell the region servers to unassign all the regions to balance  (the re-assignment itself is async). 
+Otherwise false (Will not run if regions in transition).
+
+Command: close_region
+Close a single region.  Ask the master to close a region out on the cluster
+or if 'SERVER_NAME' is supplied, ask the designated hosting regionserver to
+close the region directly.  Closing a region, the master expects 'REGIONNAME'
+to be a fully qualified region name.  When asking the hosting regionserver to
+directly close a region, you pass the regions' encoded name only. A region
+name looks like this:
+ 
+ TestTable,0094429456,1289497600452.527db22f95c8a9e0116f0cc13c680396.
+
+The trailing period is part of the regionserver name. A region's encoded name
+is the hash at the end of a region name; e.g. 527db22f95c8a9e0116f0cc13c680396 
+(without the period).  A 'SERVER_NAME' is its host, port plus startcode. For
+example: host187.example.com,60020,1289493121758 (find servername in master ui
+or when you do detailed status in shell).  This command will end up running
+close on the region hosting regionserver.  The close is done without the
+master's involvement (It will not know of the close).  Once closed, region will
+stay closed.  Use assign to reopen/reassign.  Use unassign or move to assign
+the region elsewhere on cluster. Use with caution.  For experts only.
+Examples:
+
+  hbase> close_region 'REGIONNAME'
+  hbase> close_region 'REGIONNAME', 'SERVER_NAME'
+
+Command: compact
+          Compact all regions in passed table or pass a region row
+          to compact an individual region. You can also compact a single column
+          family within a region.
+          Examples:
+          Compact all regions in a table:
+          hbase> compact 't1'
+          Compact an entire region:
+          hbase> compact 'r1'
+          Compact only a column family within a region:
+          hbase> compact 'r1', 'c1'
+          Compact a column family within a table:
+          hbase> compact 't1', 'c1'
+
+Command: flush
+Flush all regions in passed table or pass a region row to
+flush an individual region.  For example:
+
+  hbase> flush 'TABLENAME'
+  hbase> flush 'REGIONNAME'
+
+Command: hlog_roll
+Roll the log writer. That is, start writing log messages to a new file.
+The name of the regionserver should be given as the parameter.  A
+'server_name' is the host, port plus startcode of a regionserver. For
+example: host187.example.com,60020,1289493121758 (find servername in
+master ui or when you do detailed status in shell)
+
+Command: major_compact
+          Run major compaction on passed table or pass a region row
+          to major compact an individual region. To compact a single
+          column family within a region specify the region name
+          followed by the column family name.
+          Examples:
+          Compact all regions in a table:
+          hbase> major_compact 't1'
+          Compact an entire region:
+          hbase> major_compact 'r1'
+          Compact a single column family within a region:
+          hbase> major_compact 'r1', 'c1'
+          Compact a single column family within a table:
+          hbase> major_compact 't1', 'c1'
+
+Command: move
+Move a region.  Optionally specify target regionserver else we choose one
+at random.  NOTE: You pass the encoded region name, not the region name so
+this command is a little different to the others.  The encoded region name
+is the hash suffix on region names: e.g. if the region name were
+TestTable,0094429456,1289497600452.527db22f95c8a9e0116f0cc13c680396. then
+the encoded region name portion is 527db22f95c8a9e0116f0cc13c680396
+A server name is its host, port plus startcode. For example:
+host187.example.com,60020,1289493121758
+Examples:
+
+  hbase> move 'ENCODED_REGIONNAME'
+  hbase> move 'ENCODED_REGIONNAME', 'SERVER_NAME'
+
+Command: split
+Split entire table or pass a region to split individual region.  With the 
+second parameter, you can specify an explicit split key for the region.  
+Examples:
+    split 'tableName'
+    split 'regionName' # format: 'tableName,startKey,id'
+    split 'tableName', 'splitKey'
+    split 'regionName', 'splitKey'
+
+Command: unassign
+Unassign a region. Unassign will close region in current location and then
+reopen it again.  Pass 'true' to force the unassignment ('force' will clear
+all in-memory state in master before the reassign. If results in
+double assignment use hbck -fix to resolve. To be used by experts).
+Use with caution.  For expert use only.  Examples:
+
+  hbase> unassign 'REGIONNAME'
+  hbase> unassign 'REGIONNAME', true
+
+Command: zk_dump
+Dump status of HBase cluster as seen by ZooKeeper.
+
+--------------------------------------------------------------------------------
+
+WARNING: Above commands are for 'experts'-only as misuse can damage an install
+
+hbase(main):010:0> 
+
+
+
+
+
+

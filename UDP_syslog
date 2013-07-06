@@ -1,0 +1,40 @@
+@version: 3.2
+
+options {
+        chain_hostnames(yes);
+        keep_hostname(yes);
+
+        create_dirs(yes);
+        dir_owner(etu);
+        dir_group(etu);
+        dir_perm(0744);
+        owner(etu);
+        group(etu);
+        perm(0644);
+
+        stats_freq(43200);
+        mark_freq(3600);
+
+        time_reopen (10);
+        time_reap(5);
+        long_hostnames (off);
+        use_dns (no);
+        use_fqdn (no);
+        log_fifo_size (73741824);
+        stats_freq(10);
+        flush_lines(100);
+        flush_timeout(10000);
+        log_fetch_limit(100);
+        log_iw_size(2000);
+};
+
+source src { unix-stream("/dev/log"); internal(); };
+source remote { udp(ip(0.0.0.0) port(514) so_rcvbuf(33554432)); };
+
+destination local_messages { file("/opt/var/log/syslog-ng/local_syslog-ng.${HOST}.log"); };
+destination remote_messages { file("/opt/var/log/syslog-ng/tcp_syslog-ng.etu-5.log"); };
+
+filter checkIsSshPortOpen { not match("Bad protocol version identification" value("MESSAGE")); };
+
+log { source(src); filter(checkIsSshPortOpen); destination(local_messages); };
+log { source(remote); filter(checkIsSshPortOpen); destination(remote_messages); };

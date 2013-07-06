@@ -1,0 +1,370 @@
+#!/bin/bash
+
+# global vars
+mr_home="/opt/hadoopmr"
+mr_cfg_root="$mr_home/conf"
+mr_cfg="$mr_cfg_root/mapred-site.xml"
+# hdfs settings
+hdfs_home="/opt/hadoop"
+hdfs_cfg_root="$hdfs_home/etc/hadoop"
+hdfs_cfg="$hdfs_cfg_root/hdfs-site.xml"
+hdfs_env="$hdfs_cfg_root/hadoop-env.sh"
+hdfs_log4j="$hdfs_cfg_root/log4j.properties"
+hdfs_sbin="$hdfs_home/sbin"
+hdfs_daemon="$hdfs_sbin/hadoop-daemon.sh"
+core_cfg="$hdfs_cfg_root/core-site.xml"
+# yarn settings
+yarn_home="$hdfs_home"
+yarn_etc="$yarn_home/etc"
+yanr_logdir="/opt/var/log/hadoop"
+yarn_cfg_root="$yarn_home/etc/hadoop"
+yarn_cfg="$yarn_cfg_root/yarn-site.xml"
+yarn_mr_cfg="$yarn_cfg_root/mapred-site.xml"
+yarn_env="$hdfs_cfg_root/yarn-env.sh"
+yarn_bin="$yarn_home/bin"
+yarn_sbin="$yarn_home/sbin"
+yarn_daemon="$yarn_sbin/yarn-daemon.sh"
+yarn_exec="$yarn_bin/container-executor"
+yarn_exec_cfg="$yarn_cfg_root/container-executor.cfg"
+# etu sepcific
+etu_cfg="/opt/etu/etc/config.properties"
+etu_var="/var/disk"
+etu_kt="/opt/etu/config_templates/hadoop/hadoop.keytab"
+if [ `which fping >/dev/null; echo $?` != 0 ]; then
+   _ping="ping -c1 -w2"
+else
+   _ping="fping -c1 -t100"
+fi
+adm_acc="admin"
+
+
+# common func
+info() {
+    echo -e "`date +%c` - INFO: $* \n"
+}
+
+warn() {
+    echo -e "`date +%c` - WARN: $* \n"
+}
+
+error() {
+    printf  "`date +%c` - ERROR: $*\n" 
+    exit 1
+}
+
+chk_file () {
+  if [ ! -f $1 ]; then
+     error "Missing file: $1"
+     exit 1
+  fi  
+}
+
+chk_dir () {
+  if [ ! -d $1 ]; then
+     error "Cant find directory: $1"
+     return 1
+  fi  
+}
+
+
+load_var () {
+
+  if [ ! -f $etu_cfg ]; then
+     error "Cant find Etu config properties"
+     exit 1
+  fi
+  #info "Load default Etu config properties"
+  source  $etu_cfg
+  _master=$USER_HOST_NAME
+  _master_ha=$USER_HOST_NAME_STANDBY_MASTER
+  _master_fqdn=$USER_HOST_NAME.$USER_DOMAIN
+  _dn=$USER_DOMAIN
+  _krb_dn=`echo $USER_DOMAIN | tr [a-z] [A-Z]`
+  etu_princ="etu/_HOST@$_krb_dn"
+
+}
+
+
+_backup () {
+  if [ ! -f $1.bak ]; then
+     info "Backing up config file or directory: $1" 
+     cp -rPf $1 $1.bak
+  else
+     info "Backup file of $1 exist!"
+  fi
+}
+
+
+_add_xml () {
+
+  if [ $# -lt 3 ]; then
+     error "Usage: $0 parameter value xml_file
+                   e.g. $0 yarn.scheduler.capacity.root.maximum-capacity 100 yarn-site.xml
+		   "
+     exit 1
+  elif [ ! -f $3 ]; then
+      error "Cant find output file: $3" ; exit 1
+  else
+     info "Append property $1 to xml settings $3 ..."
+     echo -e "<property>\n <name>$1</name>\n <value>$2</value>\n</property>\n" >> $3
+  fi
+
+}
+
+
+_get_index() {
+  if [ $# -lt 2 ]; then
+     echo "Usage: $0 val array"
+  fi
+  local i=1 s=$1; shift
+  while [ $s != $1 ]
+  do    ((i++)); shift
+      [ -z "$1" ] && { i=0; break; }
+  done
+  echo $i
+}
+
+
+_yarn_perm () {
+
+   info "YARN security setting: ownership and permission of relevant settings"
+   chown root $yarn_home; chown root $yarn_etc; chown root $yarn_cfg_root
+   chown root $yarn_exec; chmod 710 $yarn_exec; chmod ug+s $yarn_exec
+   chown root $yarn_exec_cfg; chmod 740 $yarn_exec_cfg
+
+}
+
+
+_get_worker () {
+
+  load_var
+  #info "Get all Etu worker host list"
+  _th=(`grep $_dn /etc/hosts | awk '{print $(NF)}' | grep -v $_master | grep -v $_master_ha`)
+  #info "Exclude offline workers from defined workers"
+  let j=0
+  for i in ${_th[@]}
+  do
+     $_ping $i >& /dev/null
+     if [ $? != 0 ]; then
+        #info "Removing $i from host list (offline or unreachable"
+	unset _th[$j]
+     fi
+     let j+=1
+  done
+  echo ${_th[@]}
+
+}
+
+
+_stop_mr () {
+
+  local _cache=$HOME/.header
+  local _curl="curl --insecure"
+  local etu_web="https://$_master_fqdn"
+  local adm_pass="${ETU_ADMPASS}" # default password for etu web admin
+
+  info "Stop MR1 service from Etu management console"
+  $_curl -d "user=$adm_acc&password=$adm_pass" --dump-header $_cache "$etu_web/login.html"
+  $_curl -d "service=HadoopMrModule" -L -b $_cache "$etu_web/module/stopService.do"
+  #curl --insecure -L -b $_cache "https://$_master_fqdn/module/serviceList.do"  | python -mjson.tool |grep -E 'serviceFullName|serviceName|serviceStatus'
+  info "Cleanup web cache"
+  rm -f $_cache
+
+}
+
+
+start_yarn () {
+
+  _stop_mr
+  info "Start YARN service now"
+  info "Start resource manager from master"
+  _yarn_perm
+  su - etu -c "$yarn_daemon start resourcemanager"
+  info "Start nodemanager from all Etu workers"
+  for i in `_get_worker`
+  do
+     info "status - nodemanager of worker $i ..."
+     ssh $i "chown root $yarn_home; chown root $yarn_etc; chown root $yarn_cfg_root; chown root $yarn_exec; chmod 710 $yarn_exec; chmod ug+s $yarn_exec; chown root $yarn_exec_cfg; chmod 740 $yarn_exec_cfg" # identical patch at clients
+     su - etu -c "ssh $i $yarn_daemon start nodemanager"
+  done
+
+}
+
+
+rep_yarn_cfg () {
+
+  info "Replicating YARN settings to all workers"
+  local _f=($hdfs_cfg $hdfs_env $hdfs_log4j $yarn_cfg $yarn_env $yarn_exec_cfg)
+  for i in `_get_worker`
+  do
+     info "Updating YARN settings of worker: $i"
+     for j in ${_f[@]}
+     do
+        info "Replicate setting: $j"
+        scp -q $j $i:$j
+     done
+  done
+
+}
+
+
+update_cfg (){
+
+   _backup $mr_cfg
+   info "Overriding Hadoop mapreduce site xml"
+   cat > $mr_cfg << eof
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+<property>
+ <name>mapreduce.framework.name</name>
+  <value>yarn</value>
+  </property>
+</configuration>
+eof
+  info "Override also mapreduce config from hadoop"
+  cp -rPf $mr_cfg $yarn_mr_cfg
+
+}
+
+
+hadoop_env () {
+
+  _backup $hdfs_env
+  if [ `grep 'etu yarn cfg' $hdfs_env >/dev/null; echo $?` != 0 ]; then
+     cat >> $hdfs_env << HDFS_ENV_EOF
+# etu yarn cfg
+#export YARN_HOME=\$HADOOP_HOME
+#export HADOOP_HDFS_HOME=\$HADOOP_HOME/share/hadoop/hdfs
+#export HADOOP_MAPRED_HOME=\$HADOOP_HOME/share/hadoop/mapreduce
+#export HADOOP_COMMON_HOME=\$HADOOP_HOME/share/hadoop/common
+# User for YARN daemons
+export HADOOP_YARN_USER=etu
+export YARN_CONF_DIR=\$HADOOP_HOME/etc/hadoop
+export YARN_LOG_DIR=$yarn_logdir
+HDFS_ENV_EOF
+  else
+     info "YARN settings applied to Hadoop env already"
+  fi
+
+}
+
+
+yarn_env () {
+
+  _backup $yarn_env
+  info "Updating YARN env settings"
+  #echo -e 'export HADOOP_YARN_USER=etu\nexport HADOOP_HOME=/opt/hadoop\nexport HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop\nexport JAVA_HOME=/opt/java\nexport YARN_HOME=$HADOOP_HOME\nexport YARN_CONF_DIR=$HADOOP_CONF_DIR\nexport HADOOP_COMMON_HOME=$HADOOP_HOME/share/hadoop/common\nexport HADOOP_HDFS_HOME=$HADOOP_HOME/share/hadoop/hdfs\nexport HADOOP_MAPRED_HOME=$HADOOP_HOME/share/hadoop/mapreduce\n\n' > $yarn_env
+  echo -e 'export HADOOP_YARN_USER=etu\nexport HADOOP_HOME=/opt/hadoop\nexport HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop\nexport JAVA_HOME=/opt/java\nexport YARN_HOME=$HADOOP_HOME\nexport YARN_CONF_DIR=$HADOOP_CONF_DIR\nexport YARN_LOG_DIR=/opt/var/log/hadoop\n' > $yarn_env
+ cat $yarn_env.bak >> $yarn_env
+
+}
+
+
+yarn_cfg () {
+
+  info "Add YARN container executor configuration"
+  echo -e 'yarn.nodemanager.local-dirs=/var/disk/a/hadoop/yarn/local,/var/disk/b/hadoop/yarn/local,/var/disk/c/hadoop/yarn/local,/var/disk/d/hadoop/yarn/local\nyarn.nodemanager.linux-container-executor.group=etu\nyarn.nodemanager.log-dirs=/var/disk/a/hadoop/yarn/log,/var/disk/b/hadoop/yarn/log,/var/disk/c/hadoop/yarn/log,/var/disk/d/hadoop/yarn/log\nyarn.log.dir=/opt/var/log/hadoop\nbanned.users=hdfs,yarn,mapred,bin\nmin.user.id=1000\n' > $yarn_exec_cfg
+  info "Preparing YARN settings"
+  if [ -f $yarn_cfg ]; then
+     info "YARN config exist, backup now!"
+     if [ ! -f $yarn_cfg.bak ]; then
+        _backup $yarn_cfg
+     fi
+  fi
+
+  info "Load default Etu config properties"
+  load_var
+
+  echo "<configuration>" > $yarn_cfg 
+  _add_xml yarn.resourcemanager.resource-tracker.address           $_master_fqdn:8031 $yarn_cfg
+  _add_xml yarn.resourcemanager.address                            $_master_fqdn:8032 $yarn_cfg
+  _add_xml yarn.resourcemanager.scheduler.address                  $_master_fqdn:8030 $yarn_cfg
+  _add_xml yarn.resourcemanager.admin.address                      $_master_fqdn:8033 $yarn_cfg
+  _add_xml yarn.resourcemanager.webapp.address                     $_master_fqdn:8088 $yarn_cfg
+  _add_xml mapreduce.jobhistory.address                            $_master_fqdn:10020 $yarn_cfg
+  _add_xml mapreduce.jobhistory.webapp.address                     $_master_fqdn:19888 $yarn_cfg
+  _add_xml yarn.resourcemanager.scheduler.class                    org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler $yarn_cfg
+  _add_xml mapred.map.tasks.speculative.execution                  false $yarn_cfg
+  _add_xml mapred.reduce.tasks.speculative.execution               false $yarn_cfg
+  _add_xml yarn.log-aggregation-enable                             true $yarn_cfg
+  _add_xml yarn.scheduler.capacity.root.capacity                   100 $yarn_cfg
+  _add_xml yarn.scheduler.capacity.root.maximum-capacity           100 $yarn_cfg
+  _add_xml yarn.scheduler.capacity.root.minimum-user-limit-percent 100 $yarn_cfg
+  _add_xml yarn.scheduler.capacity.root.user-limit-factor          1 $yarn_cfg
+  _add_xml yarn.scheduler.capacity.maximum-applications            1000 $yarn_cfg
+  _add_xml yarn.scheduler.capacity.maximum-am-resource-percent     0.5 $yarn_cfg
+  _add_xml yarn.nodemanager.aux-services                           mapreduce.shuffle $yarn_cfg
+  _add_xml yarn.nodemanager.aux-services.mapreduce.shuffle.class   org.apache.hadoop.mapred.ShuffleHandler $yarn_cfg
+  _add_xml yarn.nodemanager.local-dirs    "$etu_var/a/hadoop/yarn/local,$etu_var/b/hadoop/yarn/local,$etu_var/c/hadoop/yarn/local,$etu_var/d/hadoop/yarn/local" $yarn_cfg
+  _add_xml yarn.nodemanager.log-dirs                               $etu_var/a/hadoop/yarn/log $yarn_cfg
+  _add_xml yarn.nodemanager.remote-app-log-dir                     /opt/var/log/hadoop/yarn/apps $yarn_cfg
+  _add_xml yarn.resourcemanager.keytab                             $etu_kt $yarn_cfg
+  _add_xml yarn.resourcemanager.principal                          $etu_princ $yarn_cfg
+  _add_xml yarn.nodemanager.keytab                                 $etu_kt $yarn_cfg
+  _add_xml yarn.nodemanager.principal                              $etu_princ $yarn_cfg
+  _add_xml yarn.nodemanager.container-executor.class               org.apache.hadoop.yarn.server.nodemanager.LinuxContainerExecutor $yarn_cfg
+  _add_xml yarn.nodemanager.linux-container-executor.group         yarn $yarn_cfg
+  _add_xml mapreduce.jobhistory.keytab                             $etu_kt $yarn_cfg
+  _add_xml mapreduce.jobhistory.principal                          $etu_princ $yarn_cfg
+  echo "</configuration>" >> $yarn_cfg 
+
+}
+
+
+log4j_cfg () {
+
+  info "Updating log4j properties"
+  _backup $hdfs_log4j
+  echo -e 'hadoop.root.logger=INFO,console\nhadoop.security.logger=INFO,console\nhadoop.log.dir=.\nhadoop.log.file=hadoop.log\nhadoop.mapreduce.jobsummary.logger=${hadoop.root.logger}\nhadoop.mapreduce.jobsummary.log.file=hadoop-mapreduce.jobsummary.log\nlog4j.rootLogger=${hadoop.root.logger}, EventCounter\nlog4j.threshhold=ALL\nlog4j.appender.NullAppender=org.apache.log4j.varia.NullAppender\nlog4j.appender.DRFA=org.apache.log4j.DailyRollingFileAppender\nlog4j.appender.DRFA.File=${hadoop.log.dir}/${hadoop.log.file}\nlog4j.appender.DRFA.DatePattern=.yyyy-MM-dd\nlog4j.appender.DRFA.layout=org.apache.log4j.PatternLayout\nlog4j.appender.DRFA.layout.ConversionPattern=%d{ISO8601} %p %c: %m%n\nlog4j.appender.console=org.apache.log4j.ConsoleAppender\nlog4j.appender.console.target=System.err\nlog4j.appender.console.layout=org.apache.log4j.PatternLayout\nlog4j.appender.console.layout.ConversionPattern=%d{yy/MM/dd HH:mm:ss} %p %c{2}: %m%n\nlog4j.appender.TLA=org.apache.hadoop.mapred.TaskLogAppender\nlog4j.appender.TLA.layout=org.apache.log4j.PatternLayout\nlog4j.appender.TLA.layout.ConversionPattern=%d{ISO8601} %p %c: %m%n\nhadoop.security.log.file=SecurityAuth.audit\nlog4j.appender.DRFAS=org.apache.log4j.DailyRollingFileAppender \nlog4j.appender.DRFAS.File=${hadoop.log.dir}/${hadoop.security.log.file}\nlog4j.appender.DRFAS.layout=org.apache.log4j.PatternLayout\nlog4j.appender.DRFAS.layout.ConversionPattern=%d{ISO8601} %p %c: %m%n\nlog4j.category.SecurityLogger=${hadoop.security.logger}\nlog4j.appender.RFA=org.apache.log4j.RollingFileAppender\nlog4j.appender.RFA.File=${hadoop.log.dir}/${hadoop.log.file}\nlog4j.appender.RFA.MaxFileSize=1MB\nlog4j.appender.RFA.MaxBackupIndex=30\nlog4j.appender.RFA.layout=org.apache.log4j.PatternLayout\nlog4j.appender.RFA.layout.ConversionPattern=%d{ISO8601} %-5p %c{2} - %m%n\nlog4j.appender.RFA.layout.ConversionPattern=%d{ISO8601} %-5p %c{2} (%F:%M(%L)) - %m%n\nlog4j.logger.org.apache.hadoop.hdfs.server.namenode.FSNamesystem.audit=WARN\nlog4j.logger.org.jets3t.service.impl.rest.httpclient.RestS3Service=ERROR\nlog4j.appender.EventCounter=org.apache.hadoop.log.metrics.EventCounter\nlog4j.appender.JSA=org.apache.log4j.DailyRollingFileAppender\nlog4j.appender.JSA.File=${hadoop.log.dir}/${hadoop.mapreduce.jobsummary.log.file}\nlog4j.appender.JSA.layout=org.apache.log4j.PatternLayout\nlog4j.appender.JSA.layout.ConversionPattern=%d{yy/MM/dd HH:mm:ss} %p %c{2}: %m%n\nlog4j.appender.JSA.DatePattern=.yyyy-MM-dd\nlog4j.logger.org.apache.hadoop.mapred.JobInProgress$JobSummary=${hadoop.mapreduce.jobsummary.logger}\nlog4j.additivity.org.apache.hadoop.mapred.JobInProgress$JobSummary=false\n' > $hdfs_log4j 
+
+}
+
+
+_main () {
+  
+  update_cfg
+  hadoop_env
+  yarn_env
+  log4j_cfg
+  yarn_cfg
+  rep_yarn_cfg
+  start_yarn
+
+}
+
+
+usage () {
+
+ echo -e "\nUsage: 
+
+      $0 -p passwd
+
+      -p  Etu web console admin password
+   "
+   exit 0
+}
+
+
+if [ $# -lt 1 ]; then
+   usage
+else 
+   args=`getopt -l help :hp: $*`
+   for i in $args; 
+   do
+       case $i in
+       -p) shift;
+           ETU_ADMPASS=$1
+           _main
+           ;;
+     --help)
+           usage
+           ;;
+         \?)
+           echo "Invalid option: -$OPTARG" >&2
+           usage
+           ;;
+       esac
+   done
+fi
+# end

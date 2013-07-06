@@ -1,0 +1,189 @@
+#!/bin/bash
+
+if [ $# -lt 1 ]; then
+   echo "Usage:
+		$0 hadoop-release-package.tgz
+
+		e.g.:
+
+		$0 hadoop-2.0.0-cdh4.2.0.tar.gz
+"
+exit 
+fi
+
+
+if [ $UID != 0 ]; then
+   echo "root privilege required!" 
+   exit 1
+fi
+
+
+# common func
+info() {
+    echo -e "`date +%c` - INFO: $* \n"
+}
+
+warn() {
+    echo -e "`date +%c` - WARN: $* \n"
+}
+
+error() {
+    printf  "`date +%c` - ERROR: $*\n" 
+    exit 1
+}
+
+chk_file () {
+  if [ ! -f $1 ]; then
+     error "Missing file: $1"
+     exit 1
+  fi
+}
+
+chk_dir () {
+  if [ ! -d $1 ]; then
+     error "Cant find directory: $1"
+     return 1
+  fi
+}
+
+
+# vars
+_bkp_root="/var/disk/a/user/etu/.backup"
+_hdfs_home="/opt/hadoop"
+etu_cfg="/opt/etu/etc/config.properties"
+if [ `which fping >/dev/null; echo $?` != 0 ]; then
+   _ping="ping -c1 -w2"
+else
+   _ping="fping -c1 -t100"
+fi
+
+chk_file $1 
+
+
+backup_pkg () {
+
+   chk_dir $_bkp_root
+   # preserve backup for master only
+   info "Backing up current Hadoop settings"
+   #cp -r $_hdfs_home/etc/hadoop $_bkp_root
+   cp -r $_hdfs_home $_bkp_root
+
+}
+
+
+update_pkg () {
+
+   warn "Purge existing Hadoop application"
+   rm -fr $_hdfs_home/*
+   if [ `echo $1 | grep "tar.gz" >/dev/null; echo $?` == 0 ]; then
+      _pkg_tmp=`basename $1 .tar.gz`
+   elif [ `echo $1 | grep "tgz" >/dev/null ; echo $?` == 0 ]; then
+      _pkg_tmp=`basename $1 .tgz`
+   else
+      warn "file extension not recognized (not tar.gz or tgz)"
+      exit 1
+   fi
+   tar zxf $1 -C $_hdfs_home
+   if [ -d $_hdfs_home/$_pkg_tmp ]; then
+      mv $_hdfs_home/$_pkg_tmp/* $_hdfs_home/
+      info "Purge unnecessary files from HDFS pkg"
+      rm -fr $_hdfs_home/src $_hdfs_home/cloudera $_hdfs_home/share/doc $_hdfs_home/examples
+      rm -fr $_hdfs_home/$_pkg_tmp
+   else
+      if [ `cd $_hdfs_home; ls | wc -l` -gt 1 ]; then
+         warn "More than one folder found in $_hdfs_home"
+         warn "leave unchange of current folder structure"
+         exit 1
+      fi
+      _pkg_tmp=`cd $_hdfs_home; ls`
+      mv $_hdfs_home/$_pkg_tmp/* $_hdfs_home/ 
+      info "Purge unnecessary files from HDFS pkg"
+      rm -fr $_hdfs_home/src $_hdfs_home/cloudera $_hdfs_home/share/doc $_hdfs_home/examples
+      rm -fr $_hdfs_home/$_pkg_tmp
+   fi
+   # restore cfg - skip, force restarting namenode will override existing settings
+   #cp -r $_bkp_root/hadoop/etc/hadoop $_hdfs_home/etc/hadoop
+   touch $_hdfs_home/etc/hadoop/etu_worker_decommission
+   cp /opt/etu/libexec/jsvc $_hdfs_home/libexec
+   chown -R etu.etu $_hdfs_home
+
+}
+
+
+load_var () {
+
+  if [ ! -f $etu_cfg ]; then
+     error "Cant find Etu config properties"
+     exit 1
+  fi
+  source  $etu_cfg
+  _master=$USER_HOST_NAME
+  _master_ha=$USER_HOST_NAME_STANDBY_MASTER
+  _master_fqdn=$USER_HOST_NAME.$USER_DOMAIN
+  _dn=$USER_DOMAIN
+  _krb_dn=`echo $USER_DOMAIN | tr [a-z] [A-Z]`
+  etu_princ="etu/_HOST@$_krb_dn"
+
+}
+
+
+sync_pkg () {
+
+  for i in `_get_worker`
+  do
+     info "syncing package to worker $i"
+     ssh $i "cd /opt/hadoop ; rm -fr * ; scp -r $_master:/opt/hadoop/* . ; chown -R etu.etu /opt/hadoop"
+  done
+
+}
+
+
+_get_worker () {
+
+  load_var
+  #info "Get all Etu worker host list"
+  _th=(`grep $_dn /etc/hosts | awk '{print $(NF)}' | grep -v $_master | grep -v $_master_ha`)
+  #info "Exclude offline workers from defined workers"
+  let j=0
+  for i in ${_th[@]}
+  do
+     $_ping $i >& /dev/null
+     if [ $? != 0 ]; then
+        #info "Removing $i from host list (offline or unreachable"
+	unset _th[$j]
+     fi
+     let j+=1
+  done
+  echo ${_th[@]}
+
+}
+
+
+restart_hdfs () {
+
+  local ETU_ADMPASS="etuadmin"
+  local adm_acc=admin
+  local _cache=$HOME/.header
+  local _curl="curl --insecure"
+  local _etu_mod="HadoopDfsModule"
+  local etu_web="https://$_master_fqdn"
+  local adm_pass="${ETU_ADMPASS}" # default password for etu web admin
+  info "Restart HDFS service from Etu management console"
+  $_curl -d "user=$adm_acc&password=$adm_pass" --dump-header $_cache "$etu_web/login.html"
+  $_curl -d "service=$_etu_mod" -L -b $_cache "$etu_web/module/stopService.do"
+  sleep 2
+  $_curl -d "service=$_etu_mod" -L -b $_cache "$etu_web/module/startService.do"
+  #curl --insecure -L -b $_cache "https://$_master_fqdn/module/serviceList.do"  | python -mjson.tool |grep -E 'serviceFullName|serviceName|serviceStatus'
+  info "Cleanup web cache"
+  rm -f $_cache
+
+}
+
+load_var
+backup_pkg
+update_pkg $1
+sync_pkg
+load_var
+restart_hdfs
+
+# end

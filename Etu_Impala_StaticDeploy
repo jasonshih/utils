@@ -1,0 +1,10 @@
+#!/bin/bash
+
+ETU_IMPALA=/opt/impala
+
+cd /var/disk/a/hadoop
+if [ ! -d impala ]; then 
+   mkdir impala ; chown -R etu.etu impala ; ln -s /var/disk/a/hadoop/impala $ETU_IMPALA
+else
+   ln -s /var/disk/a/hadoop/impala $ETU_IMPALA
+fi

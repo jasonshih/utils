@@ -1,0 +1,32 @@
+#!/bin/bash
+
+in=emerge.log
+_root=`dirname $0`
+_root=`cd $_root ; pwd`
+
+
+cd $_root
+
+if [ ! -f $in ]; then
+   echo "ERROR: Cant find emerge installation log"
+   exit 1 
+fi
+
+_pkg=(`grep Emerging $in | awk '{print $(NF)}'`)
+ echo "Found ${#_pkg[@]} packages from $in"
+
+ if [ `which qlist >/dev/null ; echo $?` != 0 ]; then
+    echo "ERROR: cant find qlist command, consider install pkg: portage-utils"
+    exit 1
+ fi
+
+ for i in ${_pkg[@]}
+ do
+    _pn=`echo $i | awk -F'/' '{print $2}'`
+    echo "Preparing installation tarball for $i ..."
+    qlist $i | xargs tar rpf $_pn.tar
+    echo "Installation tarball: $_pn.tar generated!"
+ done
+
+
+
