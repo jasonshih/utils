@@ -39,6 +39,6 @@ fi
 echo "upoading to etu-master via private channel ..."
 echo "create tranferred lock file and transfer to master as well ..."
 touch $_log2.copied
-su - jason -c "lftp -u jason,etuadmin etu-private-master -e 'put $_log2 $_log2.copied; exit;'"
+su - jason -c "lftp -u jason,password etu-private-master -e 'put $_log2 $_log2.copied; exit;'"
 rm $_log2.copied
 # end
