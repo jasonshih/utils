@@ -251,7 +251,15 @@ restart_mod () {
      info "Cant find defined Etu module to performance service restart"
      exit 
   else
-     local ETU_ADMPASS="etuadmin"
+
+     echo -n "Etu web management console password: " 
+     read -s ETU_ADMPASS
+     until ! [[ "y$ETU_ADMPASS" = "y" ]]
+     do
+        echo -n "Etu web management console password: " 
+        read -s ETU_ADMPASS
+     done
+   
      local adm_acc=admin
      local _cache=$HOME/.header
      local _curl="curl --insecure"
