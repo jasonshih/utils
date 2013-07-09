@@ -164,19 +164,30 @@ _get_worker () {
 
 restart_hdfs () {
 
-  local ETU_ADMPASS="etuadmin"
-  local adm_acc=admin
+  echo -n "Etu web management console password: " 
+  read -s ETU_ADMPASS
+  until ! [[ "y$ETU_ADMPASS" = "y" ]]
+  do
+     echo -n "Etu web management console password: " 
+     read -s ETU_ADMPASS
+  done
+   
+  local _etu_web="https://$_master_fqdn" 
+  local _master_fqdn=$USER_HOST_NAME.$USER_DOMAIN
+  local _adm_acc=admin
   local _cache=$HOME/.header
   local _curl="curl --insecure"
   local _etu_mod="HadoopDfsModule"
-  local etu_web="https://$_master_fqdn"
-  local adm_pass="${ETU_ADMPASS}" # default password for etu web admin
+  local _etu_web="https://$_master_fqdn"
+  local _adm_pass="${ETU_ADMPASS}" # default password for etu web admin
   info "Restart HDFS service from Etu management console"
-  $_curl -d "user=$adm_acc&password=$adm_pass" --dump-header $_cache "$etu_web/login.html"
-  $_curl -d "service=$_etu_mod" -L -b $_cache "$etu_web/module/stopService.do"
+  $_curl -s -d "user=$_adm_acc&password=$_adm_pass" --dump-header $_cache "$_etu_web/login.html" 
+ 
+  #info "List all deployed cluster services:" 
+  #$_curl -s -d "service=$_etu_mod" -L -b $_cache "$_etu_web/module/serviceList.do" | python -mjson.tool
+  $_curl -s -d "service=$_etu_mod" -L -b $_cache "$_etu_web/module/stopService.do"
   sleep 2
-  $_curl -d "service=$_etu_mod" -L -b $_cache "$etu_web/module/startService.do"
-  #curl --insecure -L -b $_cache "https://$_master_fqdn/module/serviceList.do"  | python -mjson.tool |grep -E 'serviceFullName|serviceName|serviceStatus'
+  $_curl -s -d "service=$_etu_mod" -L -b $_cache "$_etu_web/module/startService.do"
   info "Cleanup web cache"
   rm -f $_cache
 
