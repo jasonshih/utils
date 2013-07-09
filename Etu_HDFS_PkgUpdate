@@ -164,6 +164,7 @@ _get_worker () {
 
 restart_hdfs () {
 
+  info "Restart HDFS service from Etu management console"
   echo -n "Etu web management console password: " 
   read -s ETU_ADMPASS
   until ! [[ "y$ETU_ADMPASS" = "y" ]]
@@ -180,7 +181,6 @@ restart_hdfs () {
   local _etu_mod="HadoopDfsModule"
   local _etu_web="https://$_master_fqdn"
   local _adm_pass="${ETU_ADMPASS}" # default password for etu web admin
-  info "Restart HDFS service from Etu management console"
   $_curl -s -d "user=$_adm_acc&password=$_adm_pass" --dump-header $_cache "$_etu_web/login.html" 
  
   #info "List all deployed cluster services:" 
